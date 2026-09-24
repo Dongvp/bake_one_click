@@ -6,34 +6,43 @@ on:
     tags: ["v*"]
 
 jobs:
-  build_wheels:
-    name: Build on ${{ matrix.os }} (${{ matrix.cibw_arch }})
+  build:
+    name: Build on ${{ matrix.os }} (${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
-            cibw_arch: AMD64
+            arch: AMD64
           - os: macos-14
-            cibw_arch: arm64
+            arch: arm64
           - os: macos-13
-            cibw_arch: x86_64
+            arch: x86_64
           - os: ubuntu-22.04
-            cibw_arch: x86_64
+            arch: x86_64
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build wheels
-        uses: pypa/cibuildwheel@v2.23
-        env:
-          CIBW_BUILD: "cp313-*"
-          CIBW_ARCHS: ${{ matrix.cibw_arch }}
-          CIBW_BEFORE_BUILD: "pip install cython numpy"
-          CIBW_BUILD_FRONTEND: "build"
+      - name: Setup Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "cython>=3.0.11" numpy setuptools wheel
+
+      - name: Build wheel
+        run: python setup_wheel.py bdist_wheel
+
+      - name: List output
+        shell: bash
+        run: ls -la dist/
 
       - uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.os }}-${{ matrix.cibw_arch }}
-          path: ./wheelhouse/*.whl
+          name: wheel-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/*.whl
