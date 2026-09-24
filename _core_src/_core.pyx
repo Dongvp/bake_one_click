@@ -1,38 +1,37 @@
-# bake_one_click/_bake_core/_core.pyx
+# _core_src/_core.pyx
 # cython: language_level=3
 # cython: embedsignature=False
 # cython: binding=True
 # cython: always_allow_keywords=True
 """
-Bake One Click 编译核心。
-包含：图像烘焙、材质节点改写、Alpha 处理、PSD 二进制编码、
-      普通/分层烘焙全流程编排。
+Bake One Click - compiled core module.
+
+Contains: image baking, material node rewriting, alpha handling,
+PSD binary encoding, and full pipelines for standard / layered bakes.
 """
 
 import bpy
 import os
 import struct
 import numpy as np
-from bpy.app.translations import pgettext_iface as iface_
 
 
 # ==========================================================
-# 授权校验占位（编译进二进制，外部看不到）
+# License check placeholder (compiled into the binary)
 # ==========================================================
 
 def _ensure_activated():
     """
-    授权校验占位。当前永远返回 True。
-    正式发布时在此接入机器指纹 / 服务器 token 校验：
-        - 校验失败 → 返回 False
-        - 调用方根据返回值决定是否"降级输出"
-    由于此函数编译在 .pyd 内，破解者必须先反编译二进制才能定位绕过点。
+    License check placeholder. Currently always returns True.
+    For release builds, wire this to a machine-fingerprint / server-token
+    check that returns False when invalid; the caller can then degrade
+    the output silently.
     """
     return True
 
 
 # ==========================================================
-# 环境准备
+# Environment setup
 # ==========================================================
 
 def setup_bake_environment():
@@ -49,7 +48,7 @@ def create_bake_image(name, resolution, is_non_color=False):
         try:
             bpy.data.images.remove(old, do_unlink=True)
         except Exception as e:
-            print(f"[BakeOneClick] 清理旧图像失败: {e}")
+            print(f"[BakeOneClick] Failed to remove old image: {e}")
 
     img = bpy.data.images.new(
         name=name, width=resolution, height=resolution,
@@ -65,7 +64,7 @@ def create_bake_image(name, resolution, is_non_color=False):
 
 
 # ==========================================================
-# 烘焙节点管理
+# Bake node management
 # ==========================================================
 
 def _attach_bake_nodes(target_objs, image):
@@ -98,7 +97,7 @@ def _cleanup_bake_nodes(added_nodes):
 
 
 # ==========================================================
-# 材质查找工具
+# Material lookup helpers
 # ==========================================================
 
 def _get_output_node(mat):
@@ -130,7 +129,7 @@ def _get_input_source(mat, principled, input_name, temp_nodes):
 
 
 # ==========================================================
-# 按 mode 临时修改材质
+# Temporary material modification per mode
 # ==========================================================
 
 def _disable_principled_emission(mat, principled, emission_backups):
@@ -165,17 +164,17 @@ def _restore_principled_emission(mat, emission_backups):
                 if orig_socket is not None:
                     mat.node_tree.links.new(orig_socket, socket)
         except Exception as e:
-            print(f"[BakeOneClick] 恢复 Emission 失败: {e}")
+            print(f"[BakeOneClick] Failed to restore emission: {e}")
 
 
 def _apply_mode_to_material(mat, mode):
     """
     mode:
-      - 'standard'          : 材质不动
-      - 'basecolor_combined': 临时把 Principled 接回 Output（COMBINED 光照）
-      - 'basecolor_emit'    : 临时把 BaseColor 接到 Emission
-      - 'metallic_emit'     : 临时把 Metallic 接到 Emission
-      - 'alpha_emit'        : 临时把 Principled.Alpha 接到 Emission
+      - 'standard'          : leave the material untouched
+      - 'basecolor_combined': route Principled to Output (COMBINED lighting)
+      - 'basecolor_emit'    : route BaseColor to Emission
+      - 'metallic_emit'     : route Metallic to Emission
+      - 'alpha_emit'        : route Principled.Alpha to Emission
     """
     if mode == 'standard':
         return None
@@ -243,7 +242,7 @@ def _apply_mode_to_material(mat, mode):
                     if alpha_inp.is_linked:
                         src = alpha_inp.links[0].from_socket
                         print(f"[BakeOneClick] alpha_emit: "
-                              f"借用 Alpha 输入源 {src.name}")
+                              f"using Alpha link {src.name}")
                     else:
                         val_node = mat.node_tree.nodes.new('ShaderNodeValue')
                         val_node.outputs[0].default_value = \
@@ -251,7 +250,7 @@ def _apply_mode_to_material(mat, mode):
                         temp_nodes.append(val_node)
                         src = val_node.outputs[0]
                         print(f"[BakeOneClick] alpha_emit: "
-                              f"使用 Alpha 常量 {alpha_inp.default_value}")
+                              f"using Alpha constant {alpha_inp.default_value}")
 
             emit = mat.node_tree.nodes.new('ShaderNodeEmission')
             temp_nodes.append(emit)
@@ -265,7 +264,7 @@ def _apply_mode_to_material(mat, mode):
             ok = True
 
     except Exception as e:
-        print(f"[BakeOneClick] 应用材质修改失败: {e}")
+        print(f"[BakeOneClick] Failed to apply material mod: {e}")
 
     if not ok:
         if original_socket:
@@ -289,7 +288,7 @@ def _apply_mode_to_material(mat, mode):
                     original_socket, output_node.inputs['Surface']
                 )
         except Exception as e:
-            print(f"[BakeOneClick] 恢复材质连接失败: {e}")
+            print(f"[BakeOneClick] Failed to restore material links: {e}")
         _restore_principled_emission(mat, emission_backups)
         for n in temp_nodes:
             try:
@@ -323,11 +322,11 @@ def _restore_all(restore_fns):
         try:
             fn()
         except Exception as e:
-            print(f"[BakeOneClick] 恢复失败: {e}")
+            print(f"[BakeOneClick] Restore failed: {e}")
 
 
 # ==========================================================
-# 烘焙设置
+# Bake settings
 # ==========================================================
 
 def _apply_bake_settings(scene, props, is_s2a, use_clear=True,
@@ -355,7 +354,7 @@ def _apply_bake_settings(scene, props, is_s2a, use_clear=True,
 
 
 # ==========================================================
-# 烘焙入口（底层）
+# Low-level bake entry
 # ==========================================================
 
 def bake_single(source_objs, target_obj, image, props,
@@ -391,7 +390,7 @@ def bake_single(source_objs, target_obj, image, props,
 
 
 # ==========================================================
-# 图像后处理
+# Image post-processing
 # ==========================================================
 
 def fix_opaque_alpha_from_rgb(img, rgb_threshold=1e-6, alpha_threshold=1e-6):
@@ -419,12 +418,12 @@ def fix_opaque_alpha_from_rgb(img, rgb_threshold=1e-6, alpha_threshold=1e-6):
         pass
 
     print(f"[BakeOneClick] fix opaque alpha: "
-          f"原 alpha 有效={old_count}, 新 alpha 有效={new_count} / {w*h} "
+          f"old valid={old_count}, new valid={new_count} / {w*h} "
           f"({100.0 * new_count / (w * h):.1f}%)")
 
 
 # ==========================================================
-# 图像保存
+# Image saving
 # ==========================================================
 
 def _save_png_filepath(image, filepath):
@@ -433,20 +432,20 @@ def _save_png_filepath(image, filepath):
         image.file_format = 'PNG'
         image.save()
         if os.path.exists(filepath):
-            print(f"[BakeOneClick] ✅ 已保存: {filepath}")
+            print(f"[BakeOneClick] Saved: {filepath}")
             return filepath
     except Exception as e:
-        print(f"[BakeOneClick] image.save() 失败: {e}, 尝试 save_render()")
+        print(f"[BakeOneClick] image.save() failed: {e}, trying save_render()")
 
     try:
         image.save_render(filepath)
         if os.path.exists(filepath):
-            print(f"[BakeOneClick] ✅ 已保存（save_render）: {filepath}")
+            print(f"[BakeOneClick] Saved (save_render): {filepath}")
             return filepath
     except Exception as e:
-        print(f"[BakeOneClick] save_render() 也失败: {e}")
+        print(f"[BakeOneClick] save_render() also failed: {e}")
 
-    print(f"[BakeOneClick] ❌ 文件未生成: {filepath}")
+    print(f"[BakeOneClick] File was not created: {filepath}")
     return None
 
 
@@ -455,7 +454,7 @@ def save_image(image, suffix, output_dir):
     try:
         os.makedirs(output_dir, exist_ok=True)
     except Exception as e:
-        print(f"[BakeOneClick] 创建目录失败: {e}")
+        print(f"[BakeOneClick] Failed to create directory: {e}")
         return None
     suffix_str = f"_{suffix}"
     base_name = image.name
@@ -474,21 +473,21 @@ def remove_output_files(output_dir, filenames):
             try:
                 os.remove(path)
                 removed.append(path)
-                print(f"[BakeOneClick] 🗑 已删除: {path}")
+                print(f"[BakeOneClick] Deleted: {path}")
             except Exception as e:
-                print(f"[BakeOneClick] 删除文件失败 {path}: {e}")
+                print(f"[BakeOneClick] Failed to delete {path}: {e}")
     return removed
 
 
 # ==========================================================
-# 透明贴图合并
+# Transparent texture merge
 # ==========================================================
 
 def merge_opacity_into_basecolor_image(basecolor_img, opacity_img,
                                        premultiply=False):
     if (basecolor_img.size[0] != opacity_img.size[0] or
             basecolor_img.size[1] != opacity_img.size[1]):
-        print(f"[BakeOneClick] ❌ 尺寸不一致: "
+        print(f"[BakeOneClick] Size mismatch: "
               f"BaseColor{basecolor_img.size} vs Opacity{opacity_img.size}")
         return False
 
@@ -504,7 +503,8 @@ def merge_opacity_into_basecolor_image(basecolor_img, opacity_img,
     base_px[3::4] = alpha_values
 
     if premultiply:
-        print(f"[BakeOneClick] ℹ 忽略 premultiply 参数，统一使用 straight alpha")
+        print("[BakeOneClick] Note: premultiply param ignored, "
+              "using straight alpha")
 
     basecolor_img.pixels.foreach_set(base_px)
     basecolor_img.update()
@@ -514,7 +514,7 @@ def merge_opacity_into_basecolor_image(basecolor_img, opacity_img,
     except Exception:
         pass
 
-    print(f"[BakeOneClick] Alpha 统计: "
+    print(f"[BakeOneClick] Alpha stats: "
           f"min={float(np.min(alpha_values)):.3f}, "
           f"max={float(np.max(alpha_values)):.3f}, "
           f"mean={float(np.mean(alpha_values)):.3f}")
@@ -532,7 +532,7 @@ def merge_opacity_to_basecolor(basecolor_img, opacity_img, output_path,
 
 
 # ==========================================================
-# 图像数据读取
+# Image data reader
 # ==========================================================
 
 def image_to_array(img):
@@ -544,7 +544,7 @@ def image_to_array(img):
 
 
 # ==========================================================
-# PSD 写入器
+# PSD writer
 # ==========================================================
 
 def _linear_to_srgb_u8(linear_rgb):
@@ -573,17 +573,17 @@ def _psd_planar_channels(rgba_float):
 
 def write_psd(filepath, layers):
     if not layers:
-        print("[BakeOneClick] PSD: 无图层")
+        print("[BakeOneClick] PSD: no layers")
         return False
 
-    _ensure_activated()   # ← 编译进二进制的授权检查点
+    _ensure_activated()
 
     h, w = layers[0][1].shape[:2]
     n_layers = len(layers)
 
     for name, rgba in layers:
         if rgba.shape[0] != h or rgba.shape[1] != w:
-            print(f"[BakeOneClick] PSD: 图层 {name} 尺寸不匹配")
+            print(f"[BakeOneClick] PSD: layer {name} size mismatch")
             return False
 
     try:
@@ -676,19 +676,19 @@ def write_psd(filepath, layers):
             for c in range(4):
                 f.write(comp_u8[:, :, c].tobytes())
 
-        print(f"[BakeOneClick] ✅ PSD 已写入: {filepath} "
-              f"(图层顺序: {'/'.join([n for n, _ in layers])} = 顶/底)")
+        print(f"[BakeOneClick] PSD written: {filepath} "
+              f"(layers: {'/'.join([n for n, _ in layers])} = top/bottom)")
         return True
 
     except Exception as e:
-        print(f"[BakeOneClick] PSD 写入失败: {e}")
+        print(f"[BakeOneClick] PSD write failed: {e}")
         import traceback
         traceback.print_exc()
         return False
 
 
 # ==========================================================
-# 分辨率解析
+# Resolution helper
 # ==========================================================
 
 def _get_res(props):
@@ -699,7 +699,7 @@ def _get_res(props):
 
 
 # ==========================================================
-# 烘焙任务表（原 ui_panel._get_bake_tasks，核心业务逻辑）
+# Bake task table (core business logic)
 # ==========================================================
 
 def _get_bake_tasks(props):
@@ -732,7 +732,7 @@ def _get_bake_tasks(props):
 
 
 # ==========================================================
-# 普通烘焙：整流程编排
+# Standard bake pipeline
 # ==========================================================
 
 def _save_or_skip(op, img, name, base_name, props, save):
@@ -741,9 +741,9 @@ def _save_or_skip(op, img, name, base_name, props, save):
         return
     filepath = save_image(img, name, props.output_dir)
     if filepath:
-        op.report({'INFO'}, f"✅ {os.path.basename(filepath)}")
+        op.report({'INFO'}, f"OK {os.path.basename(filepath)}")
     else:
-        op.report({'WARNING'}, f"❌ {base_name}_{name}")
+        op.report({'WARNING'}, f"FAILED {base_name}_{name}")
 
 
 def _merge_transparency_if_needed(op, base_name, props):
@@ -766,16 +766,17 @@ def _merge_transparency_if_needed(op, base_name, props):
             [f"{base_name}_BaseColor.png",
              f"{base_name}_Opacity.png"],
         )
-        op.report({'INFO'}, f"✅ {os.path.basename(result)}")
+        op.report({'INFO'}, f"OK {os.path.basename(result)}")
     else:
-        op.report({'WARNING'}, f"❌ {base_name}")
+        op.report({'WARNING'}, f"FAILED {base_name}")
 
 
 def _bake_s2a(op, context, low_obj, props, res):
     if not low_obj.data.materials:
         op.report(
             {'WARNING'},
-            iface_("低模 {name} 无效或无材质").format(name=low_obj.name)
+            "Low poly {name} is invalid or has no material".format(
+                name=low_obj.name)
         )
         return
     high_objs = [
@@ -783,7 +784,7 @@ def _bake_s2a(op, context, low_obj, props, res):
         if o.type == 'MESH' and o != low_obj
     ]
     if not high_objs:
-        op.report({'WARNING'}, iface_("请至少指定一个高模"))
+        op.report({'WARNING'}, "Please specify at least one high poly")
         return
 
     tasks = _get_bake_tasks(props)
@@ -798,7 +799,7 @@ def _bake_s2a(op, context, low_obj, props, res):
 
 def _bake_self(op, context, obj, props, res):
     if not obj.data.materials:
-        print(f"[BakeOneClick] {obj.name} no material, skip")
+        print(f"[BakeOneClick] {obj.name} has no material, skip")
         return
     tasks = _get_bake_tasks(props)
     for bake_type, name, is_non_color, mode, save in tasks:
@@ -811,16 +812,16 @@ def _bake_self(op, context, obj, props, res):
 
 
 def run_bake_all(op, context):
-    """普通烘焙顶层入口。ui_panel.BAKE_OT_bake_all.execute 直接调用。"""
+    """Standard bake top-level entry."""
     props = context.scene.bake_props
     selected = [o for o in context.selected_objects if o.type == 'MESH']
 
     if not selected:
-        op.report({'WARNING'}, iface_("请至少选择一个网格物体"))
+        op.report({'WARNING'}, "Please select at least one mesh object")
         return {'CANCELLED'}
 
     if props.output_dir.startswith("//") and not bpy.data.filepath:
-        op.report({'ERROR'}, iface_("请先保存 .blend 文件"))
+        op.report({'ERROR'}, "Please save the .blend file first")
         return {'CANCELLED'}
 
     if props.bake_opacity and not props.bake_base_color:
@@ -830,7 +831,7 @@ def run_bake_all(op, context):
         if not any(o.type == 'LIGHT' for o in context.scene.objects):
             op.report(
                 {'WARNING'},
-                iface_("BaseColor 合并光照需要场景有灯光")
+                "BaseColor with lighting requires scene lights"
             )
 
     setup_bake_environment()
@@ -843,22 +844,32 @@ def run_bake_all(op, context):
         if props.use_selected_to_active:
             low_poly = context.view_layer.objects.active
             if not low_poly or low_poly.type != 'MESH':
-                op.report({'ERROR'}, iface_("请将低模设为激活物体"))
+                op.report(
+                    {'ERROR'},
+                    "Please set the low poly as the active object"
+                )
                 return {'CANCELLED'}
             if len(selected) < 2:
-                op.report({'WARNING'}, iface_("选定到激活需要至少2个物体"))
+                op.report(
+                    {'WARNING'},
+                    "Selected to Active requires at least 2 objects"
+                )
                 return {'CANCELLED'}
             _bake_s2a(op, context, low_poly, props, res)
 
         elif props.bake_opacity:
             active = context.view_layer.objects.active
             if not active or active.type != 'MESH':
-                op.report({'ERROR'}, iface_("半透明烘焙只处理激活物体"))
+                op.report(
+                    {'ERROR'},
+                    "Transparent bake only processes the active object"
+                )
                 return {'CANCELLED'}
             if not active.data.materials:
                 op.report(
                     {'WARNING'},
-                    iface_("激活物体 {name} 无材质").format(name=active.name)
+                    "Active object {name} has no material".format(
+                        name=active.name)
                 )
                 return {'CANCELLED'}
             _bake_self(op, context, active, props, res)
@@ -870,7 +881,7 @@ def run_bake_all(op, context):
     except Exception as e:
         import traceback
         traceback.print_exc()
-        op.report({'ERROR'}, iface_("烘焙失败: {err}").format(err=str(e)))
+        op.report({'ERROR'}, "Bake failed: {err}".format(err=str(e)))
         return {'CANCELLED'}
     finally:
         bpy.ops.object.select_all(action='DESELECT')
@@ -881,12 +892,12 @@ def run_bake_all(op, context):
                 pass
         context.view_layer.objects.active = original_active
 
-    op.report({'INFO'}, iface_("烘焙完成！"))
+    op.report({'INFO'}, "Bake complete!")
     return {'FINISHED'}
 
 
 # ==========================================================
-# 分层烘焙：整流程编排
+# Layered bake pipeline
 # ==========================================================
 
 def _hide_other_high(high, props):
@@ -943,7 +954,7 @@ def _bake_transparent_layer(context, low, high, props, res):
     name = props.layered_transparent_name or "Transparent"
     hidden, prev = _hide_other_high(high, props)
     try:
-        # 半透明层：margin 强制为 0，不做边缘扩展
+        # Transparent layer: margin forced to 0, no edge extension
         bake_kwargs = dict(
             is_s2a=True,
             margin=0,
@@ -1009,7 +1020,7 @@ def _write_psd_output(op, opaque_img, transparent_img, props):
         )
 
     if not psd_layers:
-        op.report({'ERROR'}, iface_("没有可输出的图层"))
+        op.report({'ERROR'}, "No layers to output")
         return
 
     output_path = os.path.join(output_dir, f"{out_name}.psd")
@@ -1018,13 +1029,13 @@ def _write_psd_output(op, opaque_img, transparent_img, props):
         layer_desc = " > ".join([n for n, _ in psd_layers])
         op.report(
             {'INFO'},
-            iface_("✅ PSD: {name} (顶 → 底: {layers})").format(
+            "OK PSD: {name} (top -> bottom: {layers})".format(
                 name=os.path.basename(output_path),
                 layers=layer_desc,
             )
         )
     else:
-        op.report({'WARNING'}, iface_("PSD 写入失败"))
+        op.report({'WARNING'}, "PSD write failed")
 
     for img in (opaque_img, transparent_img):
         if img is None:
@@ -1036,32 +1047,34 @@ def _write_psd_output(op, opaque_img, transparent_img, props):
 
 
 def run_bake_layered(op, context):
-    """分层烘焙顶层入口。ui_panel.BAKE_OT_bake_layered.execute 直接调用。"""
+    """Layered bake top-level entry."""
     props = context.scene.bake_props
     low = props.layered_low
     opaque_high = props.layered_opaque_high
     transparent_high = props.layered_transparent_high
 
     if not low:
-        op.report({'ERROR'}, iface_("请指定低模"))
+        op.report({'ERROR'}, "Please specify the low poly")
         return {'CANCELLED'}
     if low.type != 'MESH' or not low.data.materials:
         op.report(
             {'ERROR'},
-            iface_("低模 {name} 无效或无材质").format(name=low.name)
+            "Low poly {name} is invalid or has no material".format(
+                name=low.name)
         )
         return {'CANCELLED'}
     if not opaque_high and not transparent_high:
-        op.report({'ERROR'}, iface_("请至少指定一个高模"))
+        op.report({'ERROR'}, "Please specify at least one high poly")
         return {'CANCELLED'}
     if props.output_dir.startswith("//") and not bpy.data.filepath:
-        op.report({'ERROR'}, iface_("请先保存 .blend 文件"))
+        op.report({'ERROR'}, "Please save the .blend file first")
         return {'CANCELLED'}
     if props.layered_merge_lighting:
         if not any(o.type == 'LIGHT' for o in context.scene.objects):
             op.report(
                 {'WARNING'},
-                iface_("合并光照需要场景有灯光，否则输出黑色")
+                "Merge lighting requires scene lights, "
+                "otherwise output is black"
             )
 
     setup_bake_environment()
@@ -1088,15 +1101,15 @@ def run_bake_layered(op, context):
             )
 
         if opaque_img is None and transparent_img is None:
-            op.report({'ERROR'}, iface_("没有可输出的图层"))
+            op.report({'ERROR'}, "No layers to output")
             return {'CANCELLED'}
-        print(f"[BakeOneClick] ==== Layered step 3: PSD ====")
+        print("[BakeOneClick] ==== Layered step 3: PSD ====")
         _write_psd_output(op, opaque_img, transparent_img, props)
 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        op.report({'ERROR'}, iface_("分层烘焙失败: {err}").format(err=str(e)))
+        op.report({'ERROR'}, "Layered bake failed: {err}".format(err=str(e)))
         return {'CANCELLED'}
     finally:
         bpy.ops.object.select_all(action='DESELECT')
@@ -1107,5 +1120,5 @@ def run_bake_layered(op, context):
                 pass
         context.view_layer.objects.active = original_active
 
-    op.report({'INFO'}, iface_("分层烘焙完成！"))
+    op.report({'INFO'}, "Layered bake complete!")
     return {'FINISHED'}

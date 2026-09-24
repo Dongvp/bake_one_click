@@ -2,22 +2,14 @@ bl_info = {
     "name": "Bake One Click",
     "author": "yixiu",
     "version": (1, 23, 0),
-    "blender": (4, 2, 0),
+    "blender": (5, 1, 0),
     "location": "View3D > Sidebar > Bake One Click",
-    "description": "一键烘焙 + 分层烘焙合并输出 PSD",
+    "description": "One-click baking with layered output to PSD",
     "category": "Object",
 }
 
 import bpy
-from . import properties, _bake_core, ui_panel   # ★ 用编译核心替代 processing
-
-
-# ==========================================================
-# 翻译字典（内嵌，与原文件完全一致，此处省略重复粘贴）
-# ==========================================================
-translations_dict = {
-    # ... 保持原样，一字不改 ...
-}
+from . import properties, _bake_core, ui_panel
 
 
 classes = (
@@ -30,20 +22,8 @@ classes = (
     ui_panel.BAKE_PT_normal_panel,
 )
 
-_translation_registered = False
-
 
 def register():
-    global _translation_registered
-
-    if not _translation_registered:
-        try:
-            bpy.app.translations.register(__name__, translations_dict)
-            _translation_registered = True
-            print(f"[BakeOneClick] 翻译已注册: {__name__}")
-        except Exception as e:
-            print(f"[BakeOneClick] 翻译注册失败: {e}")
-
     for cls in classes:
         bpy.utils.register_class(cls)
 
@@ -53,8 +33,6 @@ def register():
 
 
 def unregister():
-    global _translation_registered
-
     if hasattr(bpy.types.Scene, "bake_props"):
         del bpy.types.Scene.bake_props
 
@@ -63,13 +41,6 @@ def unregister():
             bpy.utils.unregister_class(cls)
         except Exception:
             pass
-
-    if _translation_registered:
-        try:
-            bpy.app.translations.unregister(__name__)
-            _translation_registered = False
-        except Exception as e:
-            print(f"[BakeOneClick] 翻译注销失败: {e}")
 
 
 if __name__ == "__main__":
