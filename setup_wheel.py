@@ -1,12 +1,17 @@
 # setup_wheel.py
 """
-跨平台构建 wheel 的脚本。
+Cross-platform wheel builder for the compiled _core module.
 
-本地 Windows 开发时：优先使用独立安装的 Python 3.13（提供 Python.h + python313.lib）
-CI 环境（GitHub Actions）：自动回退到 sysconfig（setup-python 装的 Python 带完整开发文件）
+Local Windows dev: prefers the standalone Python 3.13 install
+                   (provides Python.h + python313.lib)
+CI (GitHub Actions): falls back to sysconfig (setup-python comes
+                     with full dev files)
 
-用法:
+Usage:
     python setup_wheel.py bdist_wheel
+
+Output:
+    dist/bake_one_click_core-1.23.0-cp313-cp313-<platform>.whl
 """
 import os
 import sys
@@ -23,11 +28,10 @@ LIB_NAME = f"python{sys.version_info.major}{sys.version_info.minor}"
 
 def _find_py_dev():
     """
-    返回 (include_dir, libs_dir_or_None)
-    - Windows: libs_dir 必须存在（提供 python313.lib）
-    - Linux/macOS: libs_dir 为 None
+    Return (include_dir, libs_dir_or_None).
+    - Windows: libs_dir must exist (provides python3xx.lib)
+    - Linux/macOS: libs_dir is None
     """
-    # 候选根目录：环境变量优先，其次硬编码的独立 Python 3.13
     roots = []
     env_root = os.environ.get("BOC_PY313_ROOT")
     if env_root:
@@ -35,7 +39,7 @@ def _find_py_dev():
     if sys.platform == "win32":
         roots.append(r"C:\Users\yixiu\AppData\Local\Programs\Python\Python313")
 
-    # 1) 尝试独立 Python 根目录
+    # 1) try standalone Python roots
     for root in roots:
         inc = os.path.join(root, "include")
         if not os.path.exists(os.path.join(inc, "Python.h")):
@@ -43,23 +47,23 @@ def _find_py_dev():
         if sys.platform == "win32":
             libs = os.path.join(root, "libs")
             if os.path.exists(os.path.join(libs, LIB_NAME + ".lib")):
-                print(f"[setup_wheel] 使用独立 Python: {root}")
+                print("[setup_wheel] using standalone Python: " + root)
                 return inc, libs
         else:
-            print(f"[setup_wheel] 使用独立 Python: {root}")
+            print("[setup_wheel] using standalone Python: " + root)
             return inc, None
 
-    # 2) Fallback: 当前 Python 的 sysconfig（CI 里用）
+    # 2) fallback: sysconfig of current Python (used on CI)
     inc = sysconfig.get_path("include")
     if inc and os.path.exists(os.path.join(inc, "Python.h")):
         if sys.platform == "win32":
             libs = sysconfig.get_config_var("LIBDIR") or \
                    os.path.join(os.path.dirname(inc), "libs")
             if os.path.exists(os.path.join(libs, LIB_NAME + ".lib")):
-                print(f"[setup_wheel] 使用 sysconfig: {inc}")
+                print("[setup_wheel] using sysconfig include: " + inc)
                 return inc, libs
         else:
-            print(f"[setup_wheel] 使用 sysconfig: {inc}")
+            print("[setup_wheel] using sysconfig include: " + inc)
             return inc, None
 
     return None, None
@@ -69,14 +73,14 @@ PY_INCLUDE, PY_LIBS = _find_py_dev()
 
 if PY_INCLUDE is None:
     raise RuntimeError(
-        "找不到 Python.h。请确认：\n"
-        "  - Windows 本地：独立 Python 3.13 已安装到\n"
+        "Python.h not found. Please make sure:\n"
+        "  - Windows local: standalone Python 3.13 installed at\n"
         "    C:\\Users\\yixiu\\AppData\\Local\\Programs\\Python\\Python313\n"
-        "  - CI 环境：actions/setup-python@v5 已装 Python 3.13"
+        "  - CI: actions/setup-python@v5 has installed Python 3.13"
     )
 
 if not os.path.exists(SOURCE_FILE):
-    raise RuntimeError(f"找不到源文件: {SOURCE_FILE}")
+    raise RuntimeError("Source file not found: " + SOURCE_FILE)
 
 extra_args = ["/O2"] if sys.platform == "win32" else ["-O3"]
 
