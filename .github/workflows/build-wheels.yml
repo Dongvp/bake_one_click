@@ -1,46 +1,50 @@
 name: Build Wheels
 
 on:
-  workflow_dispatch:
   push:
-    tags: ["v*"]
+    tags:
+      - 'v*'
+  workflow_dispatch:
 
 jobs:
-  build:
-    name: Build on ${{ matrix.os }} (${{ matrix.arch }})
+  build_wheels:
+    name: Build wheel on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
-            arch: AMD64
+            label: win_amd64
           - os: macos-14
-            arch: arm64
-          - os: ubuntu-22.04
-            arch: x86_64
+            label: macosx_11_0_arm64
+          - os: ubuntu-latest
+            label: linux_x86_64
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup Python 3.13
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: '3.13'
 
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "cython>=3.0.11" numpy setuptools wheel
+          python -m pip install setuptools wheel Cython numpy
 
       - name: Build wheel
         run: python setup_wheel.py bdist_wheel
 
-      - name: List output
+      - name: List dist
         shell: bash
         run: ls -la dist/
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: wheel-${{ matrix.os }}-${{ matrix.arch }}
+          name: wheel-${{ matrix.label }}
           path: dist/*.whl
+          if-no-files-found: error
