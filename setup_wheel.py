@@ -11,7 +11,7 @@ Usage:
     python setup_wheel.py bdist_wheel
 
 Output:
-    dist/bake_one_click_core-1.23.0-cp313-cp313-<platform>.whl
+    dist/bake_one_click_core-1.23.1-cp313-cp313-<platform>.whl
 """
 import os
 import sys
@@ -27,11 +27,6 @@ LIB_NAME = f"python{sys.version_info.major}{sys.version_info.minor}"
 
 
 def _find_py_dev():
-    """
-    Return (include_dir, libs_dir_or_None).
-    - Windows: libs_dir must exist (provides python3xx.lib)
-    - Linux/macOS: libs_dir is None
-    """
     roots = []
     env_root = os.environ.get("BOC_PY313_ROOT")
     if env_root:
@@ -39,7 +34,6 @@ def _find_py_dev():
     if sys.platform == "win32":
         roots.append(r"C:\Users\yixiu\AppData\Local\Programs\Python\Python313")
 
-    # 1) try standalone Python roots
     for root in roots:
         inc = os.path.join(root, "include")
         if not os.path.exists(os.path.join(inc, "Python.h")):
@@ -53,7 +47,6 @@ def _find_py_dev():
             print("[setup_wheel] using standalone Python: " + root)
             return inc, None
 
-    # 2) fallback: sysconfig of current Python (used on CI)
     inc = sysconfig.get_path("include")
     if inc and os.path.exists(os.path.join(inc, "Python.h")):
         if sys.platform == "win32":
@@ -96,7 +89,7 @@ if sys.platform == "win32":
 
 setup(
     name="bake_one_click_core",
-    version="1.23.0",
+    version="1.23.2",
     packages=[],
     py_modules=[],
     ext_modules=cythonize(

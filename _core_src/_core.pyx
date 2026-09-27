@@ -8,6 +8,11 @@ Bake One Click - compiled core module.
 
 Contains: image baking, material node rewriting, alpha handling,
 PSD binary encoding, and full pipelines for standard / layered bakes.
+
+Note: Common bake parameters (resolution / margin / cage_extrusion /
+max_ray_distance / output_dir) are shared between the standard and the
+layered pipelines. The layered transparent layer still forces margin=0
+to avoid UV-edge color bleeding.
 """
 
 import bpy
@@ -167,6 +172,50 @@ def _restore_principled_emission(mat, emission_backups):
             print(f"[BakeOneClick] Failed to restore emission: {e}")
 
 
+# ---- 材质透明混合开关：basecolor 类模式需要临时关闭 --------------
+#
+# Blender 4.2+ 使用 surface_render_method（'DITHERED' / 'BLENDED'）。
+# 旧版本使用 blend_method（'OPAQUE' / 'CLIP' / 'BLEND' / 'HASHED'）。
+# 我们两种都兼容：如果存在 surface_render_method，优先用新的。
+
+def _disable_material_blend(mat):
+    """
+    临时关闭材质的透明混合，避免 BaseColor 图被 alpha 预乘。
+    返回一个 restore 回调；如果无法修改则返回 None。
+    """
+    try:
+        if hasattr(mat, 'surface_render_method'):
+            orig = mat.surface_render_method
+            if orig == 'DITHERED':
+                return None
+            mat.surface_render_method = 'DITHERED'
+            def _restore_srm():
+                try:
+                    mat.surface_render_method = orig
+                except Exception:
+                    pass
+            return _restore_srm
+    except Exception:
+        pass
+
+    try:
+        if hasattr(mat, 'blend_method'):
+            orig = mat.blend_method
+            if orig == 'OPAQUE':
+                return None
+            mat.blend_method = 'OPAQUE'
+            def _restore_bm():
+                try:
+                    mat.blend_method = orig
+                except Exception:
+                    pass
+            return _restore_bm
+    except Exception:
+        pass
+
+    return None
+
+
 def _apply_mode_to_material(mat, mode):
     """
     mode:
@@ -175,6 +224,10 @@ def _apply_mode_to_material(mat, mode):
       - 'basecolor_emit'    : route BaseColor to Emission
       - 'metallic_emit'     : route Metallic to Emission
       - 'alpha_emit'        : route Principled.Alpha to Emission
+                              (used by layered transparent layer)
+      - 'displacement_emit' : route Displacement/Bump Height to Emission
+                              (Blender has no native DISPLACEMENT bake pass,
+                              so we fake it via EMIT)
     """
     if mode == 'standard':
         return None
@@ -191,6 +244,11 @@ def _apply_mode_to_material(mat, mode):
     temp_nodes = []
     emission_backups = []
     ok = False
+
+    # 对 basecolor 类模式，临时关闭材质的透明混合，避免 BaseColor 被 alpha 预乘
+    blend_restore = None
+    if mode in ('basecolor_emit', 'basecolor_combined'):
+        blend_restore = _disable_material_blend(mat)
 
     try:
         principled = _find_principled(mat)
@@ -263,6 +321,60 @@ def _apply_mode_to_material(mat, mode):
             )
             ok = True
 
+        elif mode == 'displacement_emit':
+            src = None
+            found = None
+
+            # 优先找 ShaderNodeDisplacement（置换节点）
+            for n in mat.node_tree.nodes:
+                if n.type == 'DISPLACEMENT':
+                    h_inp = n.inputs.get('Height')
+                    if h_inp is not None:
+                        if h_inp.is_linked:
+                            src = h_inp.links[0].from_socket
+                            found = 'Displacement.Height (linked)'
+                        else:
+                            val_node = mat.node_tree.nodes.new('ShaderNodeValue')
+                            val_node.outputs[0].default_value = h_inp.default_value
+                            temp_nodes.append(val_node)
+                            src = val_node.outputs[0]
+                            found = (f'Displacement.Height '
+                                     f'(default {h_inp.default_value:.4f})')
+                        break
+
+            # 退而求其次找 Bump 节点
+            if src is None:
+                for n in mat.node_tree.nodes:
+                    if n.type == 'BUMP':
+                        h_inp = n.inputs.get('Height')
+                        if h_inp is not None:
+                            if h_inp.is_linked:
+                                src = h_inp.links[0].from_socket
+                                found = 'Bump.Height (linked)'
+                            else:
+                                val_node = mat.node_tree.nodes.new('ShaderNodeValue')
+                                val_node.outputs[0].default_value = h_inp.default_value
+                                temp_nodes.append(val_node)
+                                src = val_node.outputs[0]
+                                found = (f'Bump.Height '
+                                         f'(default {h_inp.default_value:.4f})')
+                            break
+
+            emit = mat.node_tree.nodes.new('ShaderNodeEmission')
+            temp_nodes.append(emit)
+            if src is not None:
+                mat.node_tree.links.new(src, emit.inputs['Color'])
+                print(f"[BakeOneClick] displacement_emit: using {found}")
+            else:
+                emit.inputs['Color'].default_value = (0.5, 0.5, 0.5, 1.0)
+                print("[BakeOneClick] displacement_emit: no Displacement/Bump "
+                      "node found in material, emitting mid-grey. "
+                      "Displacement bake will be flat.")
+            mat.node_tree.links.new(
+                emit.outputs['Emission'], output_node.inputs['Surface']
+            )
+            ok = True
+
     except Exception as e:
         print(f"[BakeOneClick] Failed to apply material mod: {e}")
 
@@ -277,6 +389,8 @@ def _apply_mode_to_material(mat, mode):
                 mat.node_tree.nodes.remove(n)
             except Exception:
                 pass
+        if blend_restore:
+            blend_restore()
         return None
 
     def restore():
@@ -295,6 +409,8 @@ def _apply_mode_to_material(mat, mode):
                 mat.node_tree.nodes.remove(n)
             except Exception:
                 pass
+        if blend_restore:
+            blend_restore()
 
     return restore
 
@@ -422,14 +538,64 @@ def fix_opaque_alpha_from_rgb(img, rgb_threshold=1e-6, alpha_threshold=1e-6):
           f"({100.0 * new_count / (w * h):.1f}%)")
 
 
+def normalize_displacement_image(img, enabled=True):
+    """
+    把置换图归一化到 0-1 范围。
+
+    由于 Blender 没有原生 DISPLACEMENT 烘焙类型，我们通过 EMIT 通道
+    模拟置换烘焙，得到的高度信号值域不固定（可能为负或 >1）。
+    为了让结果能正确存入 32bit EXR，并方便在 DCC 中直接用作
+    height map，这里把 R 通道的 [min, max] 线性映射到 [0, 1]，
+    并同步写入 G / B（灰度），把 A 设为 1。
+
+    参数：
+        img     : bpy.types.Image，置换烘焙图
+        enabled : 若为 False，仅把 R 复制到 G/B 并把 alpha 置 1，
+                  不做数值重映射。
+    """
+    w, h = img.size
+    n = w * h * 4
+    px = np.empty(n, dtype=np.float32)
+    img.pixels.foreach_get(px)
+
+    r = px[0::4].copy()
+    min_v = float(np.min(r))
+    max_v = float(np.max(r))
+    span = max_v - min_v
+
+    if enabled and span > 1e-8:
+        r = (r - min_v) / span
+        px[0::4] = r
+        px[1::4] = r
+        px[2::4] = r
+        print(f"[BakeOneClick] displacement normalized: "
+              f"[{min_v:.5f}, {max_v:.5f}] -> [0, 1] "
+              f"(raw range = {span:.5f})")
+    else:
+        px[1::4] = r
+        px[2::4] = r
+        print(f"[BakeOneClick] displacement kept raw: "
+              f"min={min_v:.5f}, max={max_v:.5f}, "
+              f"range={span:.5f}")
+
+    px[3::4] = 1.0
+    img.pixels.foreach_set(px)
+    img.update()
+
+    try:
+        img.alpha_mode = 'STRAIGHT'
+    except Exception:
+        pass
+
+
 # ==========================================================
 # Image saving
 # ==========================================================
 
-def _save_png_filepath(image, filepath):
+def _save_image_filepath(image, filepath, fmt='PNG'):
     try:
         image.filepath_raw = filepath
-        image.file_format = 'PNG'
+        image.file_format = fmt
         image.save()
         if os.path.exists(filepath):
             print(f"[BakeOneClick] Saved: {filepath}")
@@ -449,7 +615,7 @@ def _save_png_filepath(image, filepath):
     return None
 
 
-def save_image(image, suffix, output_dir):
+def save_image(image, suffix, output_dir, fmt='PNG'):
     output_dir = bpy.path.abspath(output_dir)
     try:
         os.makedirs(output_dir, exist_ok=True)
@@ -460,28 +626,20 @@ def save_image(image, suffix, output_dir):
     base_name = image.name
     if base_name.endswith(suffix_str):
         base_name = base_name[:-len(suffix_str)]
-    filepath = os.path.join(output_dir, f"{base_name}{suffix_str}.png")
-    return _save_png_filepath(image, filepath)
-
-
-def remove_output_files(output_dir, filenames):
-    output_dir = bpy.path.abspath(output_dir)
-    removed = []
-    for name in filenames:
-        path = os.path.join(output_dir, name)
-        if os.path.exists(path):
-            try:
-                os.remove(path)
-                removed.append(path)
-                print(f"[BakeOneClick] Deleted: {path}")
-            except Exception as e:
-                print(f"[BakeOneClick] Failed to delete {path}: {e}")
-    return removed
+    ext = 'exr' if fmt == 'OPEN_EXR' else 'png'
+    filepath = os.path.join(output_dir, f"{base_name}{suffix_str}.{ext}")
+    return _save_image_filepath(image, filepath, fmt)
 
 
 # ==========================================================
-# Transparent texture merge
+# Transparent texture merge (used by LAYERED bake only)
 # ==========================================================
+
+# 只有当 Alpha 小于这个阈值时，才认为像素"完全透明"，
+# 并把其 RGB 强制归零，避免直通 alpha 下透明区残留颜色造成
+# "过渡区叠加一层颜色"的观感。阈值取得极小，不影响正常半透明像素。
+_ALPHA_ZERO_THRESHOLD = 1e-4
+
 
 def merge_opacity_into_basecolor_image(basecolor_img, opacity_img,
                                        premultiply=False):
@@ -499,7 +657,18 @@ def merge_opacity_into_basecolor_image(basecolor_img, opacity_img,
     basecolor_img.pixels.foreach_get(base_px)
     opacity_img.pixels.foreach_get(opa_px)
 
-    alpha_values = opa_px[0::4].copy()
+    # 从 Opacity 图的 R 通道读取 Alpha，并钳制到 0-1
+    alpha_values = np.clip(opa_px[0::4].copy(), 0.0, 1.0)
+
+    # 关键修复：把完全透明像素的 RGB 归零。
+    # 与分层烘焙 Transparent 图层的输出行为一致，避免在
+    # 直通 alpha 下透明区残留颜色造成的"叠加一层颜色"。
+    transparent_mask = alpha_values < _ALPHA_ZERO_THRESHOLD
+    if transparent_mask.any():
+        base_px[0::4][transparent_mask] = 0.0
+        base_px[1::4][transparent_mask] = 0.0
+        base_px[2::4][transparent_mask] = 0.0
+
     base_px[3::4] = alpha_values
 
     if premultiply:
@@ -517,18 +686,9 @@ def merge_opacity_into_basecolor_image(basecolor_img, opacity_img,
     print(f"[BakeOneClick] Alpha stats: "
           f"min={float(np.min(alpha_values)):.3f}, "
           f"max={float(np.max(alpha_values)):.3f}, "
-          f"mean={float(np.mean(alpha_values)):.3f}")
+          f"mean={float(np.mean(alpha_values)):.3f}, "
+          f"transparent_px={int(transparent_mask.sum())}")
     return True
-
-
-def merge_opacity_to_basecolor(basecolor_img, opacity_img, output_path,
-                               premultiply=False):
-    ok = merge_opacity_into_basecolor_image(
-        basecolor_img, opacity_img, premultiply
-    )
-    if not ok:
-        return None
-    return _save_png_filepath(basecolor_img, output_path)
 
 
 # ==========================================================
@@ -703,7 +863,6 @@ def _get_res(props):
 # ==========================================================
 
 def _get_bake_tasks(props):
-    hide_bc_op = props.bake_opacity and props.bake_base_color
     tasks = []
     if props.bake_normal:
         tasks.append(('NORMAL', 'Normal', True, 'standard', True))
@@ -713,20 +872,21 @@ def _get_bake_tasks(props):
         tasks.append(('ROUGHNESS', 'Roughness', True, 'standard', True))
     if props.bake_metallic:
         tasks.append(('EMIT', 'Metallic', True, 'metallic_emit', True))
-    if props.bake_opacity:
-        tasks.append(
-            ('EMIT', 'Opacity', True, 'alpha_emit', not hide_bc_op)
-        )
+    if props.bake_displacement:
+        # Blender 没有原生的 DISPLACEMENT 烘焙类型，
+        # 所以用 EMIT 模拟：把高模材质中 Displacement/Bump 节点的 Height
+        # 接到 Emission，再烘焙 EMIT 通道。
+        tasks.append(('EMIT', 'Displacement', True, 'displacement_emit', True))
     if props.bake_base_color:
         if props.merge_lighting:
             tasks.append(
                 ('COMBINED', 'BaseColor', False,
-                 'basecolor_combined', not hide_bc_op)
+                 'basecolor_combined', True)
             )
         else:
             tasks.append(
                 ('EMIT', 'BaseColor', False,
-                 'basecolor_emit', not hide_bc_op)
+                 'basecolor_emit', True)
             )
     return tasks
 
@@ -739,36 +899,13 @@ def _save_or_skip(op, img, name, base_name, props, save):
     if not save:
         print(f"[BakeOneClick] skip save {base_name}_{name}")
         return
-    filepath = save_image(img, name, props.output_dir)
+    # 置换图默认存 EXR 以保留浮点精度
+    fmt = 'OPEN_EXR' if name == 'Displacement' else 'PNG'
+    filepath = save_image(img, name, props.output_dir, fmt)
     if filepath:
         op.report({'INFO'}, f"OK {os.path.basename(filepath)}")
     else:
         op.report({'WARNING'}, f"FAILED {base_name}_{name}")
-
-
-def _merge_transparency_if_needed(op, base_name, props):
-    if not (props.bake_base_color and props.bake_opacity):
-        return
-    bc_img = bpy.data.images.get(f"{base_name}_BaseColor")
-    op_img = bpy.data.images.get(f"{base_name}_Opacity")
-    if not bc_img or not op_img:
-        return
-    suffix = props.transparent_suffix or "Transparent"
-    output_dir = bpy.path.abspath(props.output_dir)
-    output_path = os.path.join(output_dir, f"{base_name}_{suffix}.png")
-    result = merge_opacity_to_basecolor(
-        bc_img, op_img, output_path,
-        premultiply=props.premultiply_alpha,
-    )
-    if result:
-        remove_output_files(
-            props.output_dir,
-            [f"{base_name}_BaseColor.png",
-             f"{base_name}_Opacity.png"],
-        )
-        op.report({'INFO'}, f"OK {os.path.basename(result)}")
-    else:
-        op.report({'WARNING'}, f"FAILED {base_name}")
 
 
 def _bake_s2a(op, context, low_obj, props, res):
@@ -788,27 +925,36 @@ def _bake_s2a(op, context, low_obj, props, res):
         return
 
     tasks = _get_bake_tasks(props)
+
     for bake_type, name, is_non_color, mode, save in tasks:
         img = create_bake_image(f"{low_obj.name}_{name}", res, is_non_color)
         bake_single(
             high_objs, low_obj, img, props, bake_type, mode, is_s2a=True,
         )
+        if name == 'Displacement':
+            normalize_displacement_image(
+                img, enabled=props.bake_displacement_normalize
+            )
         _save_or_skip(op, img, name, low_obj.name, props, save)
-    _merge_transparency_if_needed(op, low_obj.name, props)
 
 
 def _bake_self(op, context, obj, props, res):
     if not obj.data.materials:
         print(f"[BakeOneClick] {obj.name} has no material, skip")
         return
+
     tasks = _get_bake_tasks(props)
+
     for bake_type, name, is_non_color, mode, save in tasks:
         img = create_bake_image(f"{obj.name}_{name}", res, is_non_color)
         bake_single(
             [obj], obj, img, props, bake_type, mode, is_s2a=False,
         )
+        if name == 'Displacement':
+            normalize_displacement_image(
+                img, enabled=props.bake_displacement_normalize
+            )
         _save_or_skip(op, img, name, obj.name, props, save)
-    _merge_transparency_if_needed(op, obj.name, props)
 
 
 def run_bake_all(op, context):
@@ -823,9 +969,6 @@ def run_bake_all(op, context):
     if props.output_dir.startswith("//") and not bpy.data.filepath:
         op.report({'ERROR'}, "Please save the .blend file first")
         return {'CANCELLED'}
-
-    if props.bake_opacity and not props.bake_base_color:
-        props.bake_base_color = True
 
     if props.bake_base_color and props.merge_lighting:
         if not any(o.type == 'LIGHT' for o in context.scene.objects):
@@ -856,23 +999,6 @@ def run_bake_all(op, context):
                 )
                 return {'CANCELLED'}
             _bake_s2a(op, context, low_poly, props, res)
-
-        elif props.bake_opacity:
-            active = context.view_layer.objects.active
-            if not active or active.type != 'MESH':
-                op.report(
-                    {'ERROR'},
-                    "Transparent bake only processes the active object"
-                )
-                return {'CANCELLED'}
-            if not active.data.materials:
-                op.report(
-                    {'WARNING'},
-                    "Active object {name} has no material".format(
-                        name=active.name)
-                )
-                return {'CANCELLED'}
-            _bake_self(op, context, active, props, res)
 
         else:
             for obj in selected:
@@ -926,11 +1052,13 @@ def _bake_opaque_layer(context, low, high, props, res):
     hidden, prev = _hide_other_high(high, props)
     try:
         img = create_bake_image(f"__layered_{name}__", res, False)
+        # 使用公共烘焙参数（resolution / margin / cage_extrusion /
+        # max_ray_distance / output_dir），切换模式时不重置。
         bake_kwargs = dict(
             is_s2a=True,
-            margin=props.layered_margin,
-            cage_extrusion=props.layered_cage_extrusion,
-            max_ray_distance=props.layered_max_ray_distance,
+            margin=props.margin,
+            cage_extrusion=props.cage_extrusion,
+            max_ray_distance=props.max_ray_distance,
         )
         if props.layered_merge_lighting:
             bake_single(
@@ -944,7 +1072,7 @@ def _bake_opaque_layer(context, low, high, props, res):
             )
         fix_opaque_alpha_from_rgb(img)
         print(f"[BakeOneClick] opaque layer baked: {img.name} "
-              f"(margin={props.layered_margin})")
+              f"(margin={props.margin})")
         return img
     finally:
         _restore_hidden(hidden, prev)
@@ -954,12 +1082,13 @@ def _bake_transparent_layer(context, low, high, props, res):
     name = props.layered_transparent_name or "Transparent"
     hidden, prev = _hide_other_high(high, props)
     try:
-        # Transparent layer: margin forced to 0, no edge extension
+        # Transparent layer: margin forced to 0, no edge extension.
+        # cage_extrusion / max_ray_distance 仍使用公共参数。
         bake_kwargs = dict(
             is_s2a=True,
             margin=0,
-            cage_extrusion=props.layered_cage_extrusion,
-            max_ray_distance=props.layered_max_ray_distance,
+            cage_extrusion=props.cage_extrusion,
+            max_ray_distance=props.max_ray_distance,
         )
 
         bc_img = create_bake_image(

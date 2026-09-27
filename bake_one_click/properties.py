@@ -1,11 +1,6 @@
 import bpy
 
 
-def _on_opacity_changed(self, context):
-    if self.bake_opacity:
-        self.bake_base_color = True
-
-
 RESOLUTION_ITEMS = [
     ('256',  '256 x 256',   '256 x 256'),
     ('512',  '512 x 512',   '512 x 512'),
@@ -16,55 +11,74 @@ RESOLUTION_ITEMS = [
 
 
 class BakeProperties(bpy.types.PropertyGroup):
+    # ==========================================================
+    # 公共烘焙参数（普通烘焙 / 分层烘焙共用，切换不重置）
+    # ==========================================================
     resolution: bpy.props.EnumProperty(
         name="Resolution",
         items=RESOLUTION_ITEMS,
         default='2048',
-        description="Bake texture resolution",
+        description="Bake texture resolution (applies to all modes)",
     )
 
     margin: bpy.props.IntProperty(
         name="Margin", default=16, min=0, max=64,
-        description="UV island edge margin",
+        description="UV island edge margin. Applies to all modes. "
+                    "Note: the layered transparent layer always uses "
+                    "margin=0 to avoid color bleeding at UV edges.",
     )
 
+    cage_extrusion: bpy.props.FloatProperty(
+        name="Cage Extrusion", default=0.0, min=0.0, max=10.0,
+        description="Cage extrusion distance (only used when baking "
+                    "with Selected to Active)",
+    )
+
+    max_ray_distance: bpy.props.FloatProperty(
+        name="Max Ray Distance", default=0.0, min=0.0, max=10.0,
+        description="Max ray distance (only used when baking "
+                    "with Selected to Active)",
+    )
+
+    output_dir: bpy.props.StringProperty(
+        name="Output Dir", default="//bake_output", subtype='DIR_PATH',
+    )
+
+    # ==========================================================
+    # 普通烘焙专有
+    # ==========================================================
     bake_normal: bpy.props.BoolProperty(name="Normal", default=True)
     bake_ao: bpy.props.BoolProperty(name="AO", default=True)
     bake_base_color: bpy.props.BoolProperty(name="Base Color", default=False)
     bake_roughness: bpy.props.BoolProperty(name="Roughness", default=False)
     bake_metallic: bpy.props.BoolProperty(name="Metallic", default=False)
-    bake_opacity: bpy.props.BoolProperty(
-        name="Opacity", default=True, update=_on_opacity_changed,
+
+    bake_displacement: bpy.props.BoolProperty(
+        name="Displacement", default=False,
+        description="Bake displacement map (float EXR). "
+                    "Requires a Displacement/Bump node in the high-poly "
+                    "material to provide the height signal.",
+    )
+    bake_displacement_normalize: bpy.props.BoolProperty(
+        name="Normalize Displacement", default=True,
+        description="Remap displacement values to 0-1 range",
     )
 
     merge_lighting: bpy.props.BoolProperty(
         name="BaseColor with Lighting", default=False,
     )
 
-    merge_transparency: bpy.props.BoolProperty(
-        name="Merge to Transparent", default=True,
+    use_selected_to_active: bpy.props.BoolProperty(
+        name="Selected to Active", default=False,
     )
-    transparent_suffix: bpy.props.StringProperty(
-        name="Transparent Suffix", default="Transparent",
-    )
+
     premultiply_alpha: bpy.props.BoolProperty(
         name="Premultiply Alpha", default=True,
     )
 
-    use_selected_to_active: bpy.props.BoolProperty(
-        name="Selected to Active", default=False,
-    )
-    cage_extrusion: bpy.props.FloatProperty(
-        name="Cage Extrusion", default=0.0, min=0.0, max=10.0
-    )
-    max_ray_distance: bpy.props.FloatProperty(
-        name="Max Ray Distance", default=0.0, min=0.0, max=10.0
-    )
-
-    output_dir: bpy.props.StringProperty(
-        name="Output Dir", default="//bake_output", subtype='DIR_PATH'
-    )
-
+    # ==========================================================
+    # 分层烘焙专有
+    # ==========================================================
     layered_enable: bpy.props.BoolProperty(
         name="Enable Layered Baking", default=False,
     )
@@ -72,19 +86,7 @@ class BakeProperties(bpy.types.PropertyGroup):
         name="Merge Lighting",
         default=False,
         description="On: both high polys use COMBINED (lit). "
-                    "Off: both use EMIT (unlit)."
-    )
-
-    layered_margin: bpy.props.IntProperty(
-        name="Margin", default=16, min=0, max=64,
-        description="Only applies to the opaque layer. "
-                    "Transparent layer has no margin."
-    )
-    layered_cage_extrusion: bpy.props.FloatProperty(
-        name="Cage Extrusion", default=0.0, min=0.0, max=10.0,
-    )
-    layered_max_ray_distance: bpy.props.FloatProperty(
-        name="Max Ray Distance", default=0.0, min=0.0, max=10.0,
+                    "Off: both use EMIT (unlit).",
     )
 
     layered_low: bpy.props.PointerProperty(

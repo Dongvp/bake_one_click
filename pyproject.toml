@@ -1,9 +1,13 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel", "cython", "numpy"]
+requires = ["setuptools>=68", "wheel", "Cython>=3.0", "numpy"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "bake_one_click_core"
-version = "1.23.0"
-description = "Compiled core module for Bake One Click Blender addon"
-requires-python = ">=3.13"
+version = "1.23.3"
+description = "Bake One Click - compiled core module"
+requires-python = ">=3.9"
+
+[tool.setuptools]
+packages = []
+zip-safe = false

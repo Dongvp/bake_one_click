@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "bake_one_click"
-version = "1.23.0"
+version = "1.23.3"
 name = "Bake One Click"
 tagline = "One-click baking with layered output to PSD"
 maintainer = "yixiu"
@@ -17,7 +17,7 @@ platforms = [
 ]
 
 wheels = [
-    "./wheels/bake_one_click_core-1.23.0-cp313-cp313-win_amd64.whl",
-    "./wheels/bake_one_click_core-1.23.0-cp313-cp313-macosx_10_13_universal2.whl",
-    "./wheels/bake_one_click_core-1.23.0-cp313-cp313-linux_x86_64.whl",
+    "./wheels/bake_one_click_core-1.23.3-cp313-cp313-win_amd64.whl",
+#    "./wheels/bake_one_click_core-1.23.3-cp313-cp313-macosx_10_13_universal2.whl",
+#    "./wheels/bake_one_click_core-1.23.3-cp313-cp313-linux_x86_64.whl",
 ]
